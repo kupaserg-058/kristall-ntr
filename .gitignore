@@ -19,6 +19,5 @@ dist/
 .idea/
 *.log
 
-# Pre-loaded federal documents (keep folder, ignore contents)
-federal_docs/*
-!federal_docs/.gitkeep
+# Pre-loaded federal documents for the MVP pilot corpus
+!federal_docs/**
