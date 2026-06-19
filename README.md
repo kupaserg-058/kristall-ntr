@@ -1,0 +1,119 @@
+# Кристалл.НТР
+
+MVP веб-сервиса для анализа стратегических документов и извлечения направлений
+**научно-технологического развития (НТР)** с автоматической привязкой к 7
+федеральным приоритетным направлениям (Указ Президента РФ №145 от 28.02.2024).
+
+Загружаете PDF/DOCX → Gemini 2.5 Flash анализирует документ → получаете список
+найденных направлений с цитатами и уровнем уверенности → эксперт верифицирует.
+
+- **Backend:** FastAPI + SQLAlchemy (async) + PostgreSQL
+- **Frontend:** React 18 + Vite
+- **AI:** Google Gemini 2.5 Flash (`google-genai` SDK)
+
+---
+
+## 1. Локальный запуск
+
+### Предварительно
+- Python 3.11+
+- Node.js 18+
+- Docker (для PostgreSQL) либо локально установленный PostgreSQL
+- Ключ Gemini API (см. раздел 2)
+
+### Шаги
+
+```bash
+# 1. Поднять PostgreSQL
+docker-compose up -d
+
+# 2. Backend: окружение и зависимости
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Переменные окружения
+cp .env.example .env
+#   откройте .env и впишите GEMINI_API_KEY
+
+# 4. Запуск backend
+uvicorn backend.main:app --reload
+#   API:        http://localhost:8000
+#   Swagger UI: http://localhost:8000/docs
+```
+
+В отдельном терминале:
+
+```bash
+# 5. Frontend
+cd frontend
+cp .env.example .env               # при необходимости поправьте VITE_API_URL
+npm install
+npm run dev
+#   UI: http://localhost:5173
+```
+
+При старте backend автоматически:
+- создаёт таблицы в БД (если их нет);
+- сканирует `federal_docs/` и регистрирует новые файлы как федеральные документы
+  (без авто-анализа).
+
+---
+
+## 2. Как получить GEMINI_API_KEY (бесплатно)
+
+1. Откройте **https://aistudio.google.com/apikey**
+2. Войдите под Google-аккаунтом.
+3. Нажмите **Create API key** → скопируйте ключ.
+4. Вставьте его в `.env`:
+   ```
+   GEMINI_API_KEY=ваш_ключ
+   ```
+
+Google AI Studio предоставляет бесплатный тариф, которого достаточно для MVP.
+
+---
+
+## 3. Деплой на Railway
+
+1. Создайте проект на **https://railway.app** и подключите репозиторий.
+2. Добавьте плагин **PostgreSQL** (Railway сам создаст БД и переменные).
+3. В переменных окружения сервиса задайте:
+   - `GEMINI_API_KEY` — ваш ключ;
+   - `DATABASE_URL` — возьмите из плагина Postgres и приведите к виду
+     `postgresql+asyncpg://...` (замените схему `postgresql://` на
+     `postgresql+asyncpg://`);
+   - `CORS_ORIGINS` — URL вашего фронтенда (через запятую, если их несколько).
+4. Сборку и запуск Railway возьмёт из `railway.json` / `Procfile`:
+   ```
+   web: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+   ```
+5. Frontend деплойте отдельно (Railway static / Vercel / Netlify), указав
+   `VITE_API_URL` = URL backend.
+
+---
+
+## 4. Как добавить федеральные документы
+
+1. Положите файлы `.pdf` или `.docx` в папку **`federal_docs/`**.
+2. Перезапустите backend — при старте новые файлы появятся в списке документов
+   со статусом «Загружен» и типом «Федеральный».
+3. Анализ запускается **вручную**: на странице «Документы» (или через
+   `POST /api/documents/{id}/analyze`).
+
+---
+
+## API (кратко)
+
+| Метод  | Путь                                   | Назначение                         |
+|--------|----------------------------------------|------------------------------------|
+| POST   | `/api/documents/upload`                | загрузка файла (multipart)         |
+| GET    | `/api/documents`                       | список документов                  |
+| GET    | `/api/documents/{id}`                  | один документ                      |
+| POST   | `/api/documents/{id}/analyze`          | запустить анализ (фоном)           |
+| GET    | `/api/documents/{id}/directions`       | направления документа              |
+| GET    | `/api/directions`                      | все направления (+фильтры)         |
+| PATCH  | `/api/directions/{id}/status`          | сменить статус верификации         |
+| GET    | `/api/stats`                           | сводная статистика                 |
+
+Полная интерактивная документация — `http://localhost:8000/docs`.
