@@ -20,9 +20,7 @@ export default function DocumentsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const validate = (file) => {
     const name = file.name.toLowerCase();
@@ -68,15 +66,15 @@ export default function DocumentsPage() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Документы</h1>
+      <div className="page-header">
+        <h1 className="page-title">Документы</h1>
+        <p className="page-subtitle">Загружайте PDF и DOCX для анализа направлений НТР</p>
+      </div>
 
-      <div className="card upload-card">
+      <div className="card upload-section">
         <div
           className={`dropzone ${dragOver ? "dragover" : ""}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
           onClick={() => fileInputRef.current?.click()}
@@ -89,44 +87,38 @@ export default function DocumentsPage() {
             onChange={(e) => pickFile(e.target.files?.[0])}
           />
           {selectedFile ? (
-            <span className="dz-file">{selectedFile.name}</span>
+            <>
+              <div className="dz-icon">📄</div>
+              <div className="dz-file">{selectedFile.name}</div>
+              <div className="dz-hint">Нажмите, чтобы выбрать другой файл</div>
+            </>
           ) : (
-            <span className="dz-hint">
-              Перетащите файл сюда или нажмите для выбора
-              <br />
-              <small>PDF или DOCX</small>
-            </span>
+            <>
+              <div className="dz-icon">↑</div>
+              <div className="dz-title">Перетащите файл или нажмите для выбора</div>
+              <div className="dz-hint">PDF или DOCX · до 50 МБ</div>
+            </>
           )}
         </div>
 
         <div className="upload-controls">
           <div className="radio-group">
-            <label>
-              <input
-                type="radio"
-                name="doctype"
-                checked={docType === "federal"}
-                onChange={() => setDocType("federal")}
-              />
+            <label className={`radio-option ${docType === "federal" ? "selected" : ""}`}>
+              <input type="radio" name="doctype" checked={docType === "federal"} onChange={() => setDocType("federal")} />
               Федеральный
             </label>
-            <label>
-              <input
-                type="radio"
-                name="doctype"
-                checked={docType === "regional"}
-                onChange={() => setDocType("regional")}
-              />
+            <label className={`radio-option ${docType === "regional" ? "selected" : ""}`}>
+              <input type="radio" name="doctype" checked={docType === "regional"} onChange={() => setDocType("regional")} />
               Региональный
             </label>
           </div>
 
-          <button
-            className="btn btn-primary"
-            disabled={!selectedFile || uploading}
-            onClick={onUpload}
-          >
-            {uploading ? "Загрузка…" : "Загрузить и анализировать"}
+          <button className="btn btn-primary" disabled={!selectedFile || uploading} onClick={onUpload}>
+            {uploading ? (
+              <><span className="spinner" /> Загрузка…</>
+            ) : (
+              "Загрузить и анализировать"
+            )}
           </button>
         </div>
 
@@ -134,12 +126,17 @@ export default function DocumentsPage() {
       </div>
 
       <div className="doc-grid">
-        {documents.length === 0 && (
-          <p className="muted">Документов пока нет. Загрузите первый документ.</p>
+        {documents.length === 0 ? (
+          <div className="doc-empty">
+            <div className="doc-empty-icon">📂</div>
+            <div className="doc-empty-title">Документов пока нет</div>
+            <div className="muted">Загрузите первый документ выше</div>
+          </div>
+        ) : (
+          documents.map((doc) => (
+            <DocumentCard key={doc.id} doc={doc} onUpdate={updateDoc} />
+          ))
         )}
-        {documents.map((doc) => (
-          <DocumentCard key={doc.id} doc={doc} onUpdate={updateDoc} />
-        ))}
       </div>
     </div>
   );

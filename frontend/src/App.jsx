@@ -10,17 +10,15 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="header-inner">
-          <div className="logo">
-            <span className="logo-mark">◆</span> Кристалл<span className="logo-accent">.НТР</span>
-          </div>
+          <Link to="/" className="logo">
+            <div className="logo-icon">◆</div>
+            Кристалл<span className="logo-accent">.НТР</span>
+          </Link>
           <nav className="nav">
             <Link className={!isDirections ? "nav-link active" : "nav-link"} to="/">
               Документы
             </Link>
-            <Link
-              className={isDirections ? "nav-link active" : "nav-link"}
-              to="/directions"
-            >
+            <Link className={isDirections ? "nav-link active" : "nav-link"} to="/directions">
               Направления
             </Link>
           </nav>
