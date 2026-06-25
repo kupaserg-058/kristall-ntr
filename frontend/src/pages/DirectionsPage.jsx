@@ -53,8 +53,11 @@ export default function DirectionsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">Направления НТР</h1>
-        <p className="page-subtitle">Результаты анализа документов по Указу №529</p>
+        <h1 className="page-title">
+          Направления<br />
+          <span className="page-title-accent">научно-технологического развития.</span>
+        </h1>
+        <p className="page-subtitle">Результаты анализа по Указу Президента РФ №529 от 18.06.2024</p>
       </div>
 
       {stats && (

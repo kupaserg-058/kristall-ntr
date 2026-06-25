@@ -67,8 +67,11 @@ export default function DocumentsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">Документы</h1>
-        <p className="page-subtitle">Загружайте PDF и DOCX для анализа направлений НТР</p>
+        <h1 className="page-title">
+          Анализ документов<br />
+          <span className="page-title-accent">научно-технологического развития.</span>
+        </h1>
+        <p className="page-subtitle">Загрузите PDF или DOCX — система найдёт направления НТР по Указу №529</p>
       </div>
 
       <div className="card upload-section">
