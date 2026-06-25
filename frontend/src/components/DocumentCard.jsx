@@ -1,10 +1,23 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StatusBadge from "./StatusBadge.jsx";
-import { getDocument } from "../api.js";
+import { deleteDocument, getDocument } from "../api.js";
 
-export default function DocumentCard({ doc, onUpdate }) {
+export default function DocumentCard({ doc, onUpdate, onDelete }) {
   const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Удалить «${doc.original_name}»?`)) return;
+    setDeleting(true);
+    try {
+      await deleteDocument(doc.id);
+      onDelete(doc.id);
+    } catch {
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     if (doc.status !== "analyzing") return;
@@ -27,7 +40,17 @@ export default function DocumentCard({ doc, onUpdate }) {
           <div className="doc-name" title={doc.original_name}>
             {doc.original_name}
           </div>
-          <StatusBadge kind="docType" value={doc.doc_type} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <StatusBadge kind="docType" value={doc.doc_type} />
+            <button
+              className="doc-delete-btn"
+              onClick={handleDelete}
+              disabled={deleting}
+              title="Удалить документ"
+            >
+              {deleting ? "…" : "×"}
+            </button>
+          </div>
         </div>
 
         <div className="doc-card-meta">

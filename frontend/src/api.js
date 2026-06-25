@@ -47,6 +47,12 @@ export async function getDocumentDirections(id) {
   return handle(res);
 }
 
+export async function deleteDocument(id) {
+  const res = await fetch(`${BASE_URL}/api/documents/${id}`, { method: "DELETE" });
+  if (res.status === 204) return;
+  return handle(res);
+}
+
 export async function listDirections(filters = {}) {
   const params = new URLSearchParams();
   if (filters.doc_id) params.append("doc_id", filters.doc_id);

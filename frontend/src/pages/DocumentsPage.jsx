@@ -64,6 +64,10 @@ export default function DocumentsPage() {
     setDocuments((prev) => prev.map((d) => (d.id === fresh.id ? fresh : d)));
   }, []);
 
+  const deleteDoc = useCallback((id) => {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  }, []);
+
   return (
     <div className="page">
       <div className="page-header">
@@ -137,7 +141,7 @@ export default function DocumentsPage() {
           </div>
         ) : (
           documents.map((doc) => (
-            <DocumentCard key={doc.id} doc={doc} onUpdate={updateDoc} />
+            <DocumentCard key={doc.id} doc={doc} onUpdate={updateDoc} onDelete={deleteDoc} />
           ))
         )}
       </div>

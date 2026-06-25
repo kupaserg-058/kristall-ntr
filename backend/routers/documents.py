@@ -136,6 +136,18 @@ async def analyze(
     return AnalyzeResponse(status="analyzing")
 
 
+@router.delete("/{document_id}", status_code=204)
+async def delete_document(
+    document_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> None:
+    document = await db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    storage.delete_temp(document_id)
+    await db.delete(document)
+    await db.commit()
+
+
 @router.get("/{document_id}/directions", response_model=list[DirectionOut])
 async def document_directions(
     document_id: uuid.UUID, db: AsyncSession = Depends(get_db)

@@ -266,6 +266,15 @@ body {
   font-size: 12px; white-space: pre-wrap; max-height: 120px; overflow: auto; margin-top: 10px;
 }
 .doc-card-footer { border-top: 1px solid var(--border); padding: 11px 18px; }
+.doc-delete-btn {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-3); font-size: 15px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 120ms; flex-shrink: 0; font-family: inherit;
+}
+.doc-delete-btn:hover { background: var(--red-bg); border-color: var(--red-bd); color: var(--red); }
+.doc-delete-btn:active { transform: scale(0.9); }
 
 /* ── Badges ──────────────────────────────── */
 .badge {
