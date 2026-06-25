@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import logging
@@ -6,7 +7,6 @@ import uuid
 
 from google import genai
 from google.genai import types
-from sqlalchemy import select
 
 from backend import storage
 from backend.config import settings
@@ -16,31 +16,29 @@ from backend.models import Confidence, Direction, DocStatus, Document, Verificat
 logger = logging.getLogger("kristall.gemini")
 
 MODEL = "gemini-2.5-flash"
+CHUNK_SIZE = 12_000      # символов на чанк (~3-4 страницы текста)
+MAX_RETRIES = 3          # попыток на чанк при 503/429
+RETRY_DELAY = 8          # секунд между попытками
 
 _HIERARCHY_FILE = pathlib.Path(__file__).parent.parent / "ntr_hierarchy_final.json"
 
 
+# ── Иерархия НТР ────────────────────────────────────────────────────────────
+
 def _build_hierarchy_text() -> str:
-    """Строит читаемый текст иерархии НТР из JSON-файла для вставки в промпт."""
     try:
         data = json.loads(_HIERARCHY_FILE.read_text(encoding="utf-8"))
     except Exception:
         return ""
-
     lines: list[str] = []
-    for direction in data.get("directions", []):
-        lines.append(f"\n{direction['id']}. {direction['title']}")
-        for child in direction.get("children", []):
-            lines.append(f"   • {child['title']}")
-            for grandchild in child.get("children", []):
-                lines.append(f"     – {grandchild['title']}")
-
-    unmatched = data.get("unmatched", [])
-    if unmatched:
-        lines.append("\nСквозные / не привязанные к одному направлению:")
-        for item in unmatched:
-            lines.append(f"   • {item['title']}")
-
+    for d in data.get("directions", []):
+        lines.append(f"\n{d['id']}. {d['title']}")
+        for c in d.get("children", []):
+            lines.append(f"   • {c['title']}")
+            for g in c.get("children", []):
+                lines.append(f"     – {g['title']}")
+    for item in data.get("unmatched", []):
+        lines.append(f"   • {item['title']}")
     return "\n".join(lines)
 
 
@@ -49,41 +47,28 @@ _HIERARCHY_TEXT = _build_hierarchy_text()
 SYSTEM_INSTRUCTION = f"""Ты — эксперт по анализу стратегических документов в сфере \
 научно-технологического развития России.
 
-Ниже приведена полная иерархия приоритетных направлений НТР, составленная на основе \
-Указа Президента РФ №529 от 18.06.2024 и конкретизирующих документов \
-(ПП №377, Энергостратегия-2050, Указ №309 и др.).
+Ниже приведена полная иерархия приоритетных направлений НТР (Указ №529 от 18.06.2024 \
+и конкретизирующие документы).
 
-Уровень 1 — 7 федеральных приоритетных направлений (из Указа №529).
-Уровень 2 — конкретизирующие направления/технологии из отраслевых документов.
-Уровень 3 — детализация.
+Уровень 1 — 7 федеральных приоритетов. Уровень 2/3 — детализация.
 
 {_HIERARCHY_TEXT}
 
-Твоя задача: проанализируй документ региональной стратегии или программы. \
-Найди ВСЕ конкретные мероприятия, задачи, меры и направления в сфере науки и технологий. \
-Для каждого найденного элемента определи наиболее подходящее федеральное направление \
-из 7 приоритетов уровня 1 (или null, если не относится ни к одному).
+Твоя задача: найди ВСЕ конкретные мероприятия, задачи и направления в сфере науки и \
+технологий. Для каждого определи наиболее подходящее направление уровня 1 (или null).
 
-При сопоставлении используй направления уровня 2 и 3 как подсказки: \
-если мероприятие совпадает с технологией уровня 2/3, относи его к родительскому \
-направлению уровня 1. Например, «искусственный интеллект» → направление 4 \
-«Безопасность получения, хранения, передачи и обработки информации».
-
-Отвечай СТРОГО в формате JSON без markdown-обёртки и без ```json:
+Отвечай СТРОГО в формате JSON без markdown:
 {{
   "directions": [
     {{
-      "title": "точное название мероприятия/задачи как в документе",
-      "federal_match": "одно из 7 направлений уровня 1 или null",
-      "fragment": "дословная цитата из документа до 400 символов",
+      "title": "точное название как в документе",
+      "federal_match": "одно из 7 направлений или null",
+      "fragment": "цитата до 400 символов",
       "confidence": "high | medium | low"
     }}
   ]
 }}"""
 
-USER_PROMPT = "Проанализируй приложенный документ согласно инструкции и верни JSON."
-
-# JSON-схема для строгого вывода (response_schema)
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -95,10 +80,7 @@ RESPONSE_SCHEMA = {
                     "title": {"type": "string"},
                     "federal_match": {"type": "string", "nullable": True},
                     "fragment": {"type": "string"},
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["high", "medium", "low"],
-                    },
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                 },
                 "required": ["title", "fragment", "confidence"],
             },
@@ -107,17 +89,54 @@ RESPONSE_SCHEMA = {
     "required": ["directions"],
 }
 
-_client: genai.Client | None = None
 
+# ── Ротация ключей ───────────────────────────────────────────────────────────
 
-def get_client() -> genai.Client:
-    """Ленивая инициализация Gemini-клиента (чтобы старт не падал без ключа)."""
-    global _client
-    if _client is None:
-        if not settings.GEMINI_API_KEY:
+class KeyRotator:
+    """Циклически переключает Gemini-клиентов при ошибках 429/503."""
+
+    def __init__(self, keys: list[str]) -> None:
+        if not keys:
             raise RuntimeError("GEMINI_API_KEY не задан")
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    return _client
+        self._clients = [genai.Client(api_key=k) for k in keys]
+        self._index = 0
+        logger.info("Gemini: загружено %d ключ(ей)", len(self._clients))
+
+    @property
+    def current(self) -> genai.Client:
+        return self._clients[self._index]
+
+    def rotate(self) -> genai.Client:
+        """Переключиться на следующий ключ."""
+        self._index = (self._index + 1) % len(self._clients)
+        logger.warning("Gemini: переключение на ключ #%d", self._index)
+        return self._clients[self._index]
+
+
+_rotator: KeyRotator | None = None
+
+
+def get_rotator() -> KeyRotator:
+    global _rotator
+    if _rotator is None:
+        _rotator = KeyRotator(settings.gemini_api_keys)
+    return _rotator
+
+
+# ── Извлечение текста ────────────────────────────────────────────────────────
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Извлекает текст из PDF локально через pymupdf."""
+    import fitz  # pymupdf
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    parts: list[str] = []
+    for page in doc:
+        text = page.get_text("text")
+        if text.strip():
+            parts.append(text)
+    doc.close()
+    return "\n".join(parts)
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
@@ -134,16 +153,102 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     return "\n".join(parts)
 
 
+def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
+    """Разбивает текст на чанки по абзацам, не превышая chunk_size символов."""
+    paragraphs = [p for p in text.split("\n") if p.strip()]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for para in paragraphs:
+        if current_len + len(para) > chunk_size and current:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(para)
+        current_len += len(para)
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks
+
+
+# ── Анализ одного чанка с retry ──────────────────────────────────────────────
+
+async def _analyze_chunk(text: str, chunk_num: int, total: int) -> list[dict]:
+    """Отправляет один чанк в Gemini, возвращает список direction-объектов."""
+    rotator = get_rotator()
+    prompt = (
+        f"[Часть {chunk_num} из {total}]\n\n"
+        "Проанализируй фрагмент документа согласно инструкции и верни JSON.\n\n"
+        f"Текст:\n{text}"
+    )
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            client = rotator.current
+            response = await client.aio.models.generate_content(
+                model=MODEL,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=RESPONSE_SCHEMA,
+                ),
+            )
+            data = _parse_response(response.text or "")
+            directions = data.get("directions", [])
+            logger.info(
+                "Чанк %d/%d: найдено %d направлений", chunk_num, total, len(directions)
+            )
+            return directions
+
+        except Exception as exc:
+            err = str(exc)
+            is_retryable = any(
+                code in err for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
+            )
+            if is_retryable and attempt < MAX_RETRIES - 1:
+                # Если несколько ключей — переключаемся, иначе просто ждём
+                if len(get_rotator()._clients) > 1:
+                    rotator.rotate()
+                delay = RETRY_DELAY * (attempt + 1)
+                logger.warning(
+                    "Чанк %d/%d: %s, retry %d/%d через %ds",
+                    chunk_num, total, err[:80], attempt + 1, MAX_RETRIES, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error("Чанк %d/%d не обработан: %s", chunk_num, total, err[:200])
+                return []  # пропускаем чанк, не роняем весь документ
+
+    return []
+
+
+# ── Дедупликация ─────────────────────────────────────────────────────────────
+
+def _deduplicate(directions: list[dict]) -> list[dict]:
+    """Убирает дубли по title (нормализуем до нижнего регистра)."""
+    seen: set[str] = set()
+    result: list[dict] = []
+    for d in directions:
+        key = (d.get("title") or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(d)
+    return result
+
+
+# ── Вспомогательные ─────────────────────────────────────────────────────────
+
 def _parse_response(raw: str) -> dict:
-    """Парсит ответ модели: сначала напрямую, потом срезав markdown-фенсы."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-
     text = raw.strip()
     if text.startswith("```"):
-        # убрать первую строку с ``` (возможно ```json) и закрывающие ```
         lines = text.split("\n")
         if lines[0].startswith("```"):
             lines = lines[1:]
@@ -160,64 +265,65 @@ def _map_confidence(value: str | None) -> Confidence:
         return Confidence.medium
 
 
+# ── Главная функция ──────────────────────────────────────────────────────────
+
 async def analyze_document(
     document_id: uuid.UUID,
     file_bytes: bytes,
     mime_type: str,
     original_name: str,
 ) -> None:
-    """Фоновая задача: анализирует документ через Gemini и сохраняет направления."""
+    """Фоновая задача: конвертирует документ в текст, режет на чанки,
+    анализирует каждый через Gemini с ротацией ключей, сохраняет результаты."""
+
     async with AsyncSessionLocal() as session:
         document = await session.get(Document, document_id)
         if document is None:
-            logger.error("Документ %s не найден для анализа", document_id)
+            logger.error("Документ %s не найден", document_id)
             return
 
         document.status = DocStatus.analyzing
         await session.commit()
 
-        raw_response = ""
         try:
-            client = get_client()
-            is_pdf = mime_type == "application/pdf" or original_name.lower().endswith(
-                ".pdf"
-            )
-
+            # 1. Извлечь текст локально
+            is_pdf = original_name.lower().endswith(".pdf")
             if is_pdf:
-                uploaded = await client.aio.files.upload(
-                    file=io.BytesIO(file_bytes),
-                    config=types.UploadFileConfig(mime_type="application/pdf"),
-                )
-                document.gemini_file_uri = getattr(uploaded, "uri", None) or getattr(
-                    uploaded, "name", None
-                )
-                await session.commit()
-                storage.delete_temp(document_id)
-                contents = [USER_PROMPT, uploaded]
+                text = extract_text_from_pdf(file_bytes)
             else:
                 text = extract_text_from_docx(file_bytes)
-                storage.delete_temp(document_id)
-                if not text.strip():
-                    raise ValueError("Не удалось извлечь текст из DOCX (пустой документ)")
-                contents = [f"{USER_PROMPT}\n\nТекст документа:\n{text}"]
 
-            response = await client.aio.models.generate_content(
-                model=MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=RESPONSE_SCHEMA,
-                ),
+            storage.delete_temp(document_id)
+
+            if not text.strip():
+                raise ValueError("Не удалось извлечь текст из документа")
+
+            logger.info(
+                "Документ %s: извлечено %d символов текста", document_id, len(text)
             )
-            raw_response = response.text or ""
-            data = _parse_response(raw_response)
 
-            directions = data.get("directions", [])
-            if not isinstance(directions, list):
-                raise ValueError("Поле 'directions' не является списком")
+            # 2. Разбить на чанки
+            chunks = split_into_chunks(text, CHUNK_SIZE)
+            logger.info("Документ %s: %d чанков", document_id, len(chunks))
 
-            for item in directions:
+            # 3. Анализировать чанки последовательно
+            all_directions: list[dict] = []
+            for i, chunk in enumerate(chunks, 1):
+                chunk_dirs = await _analyze_chunk(chunk, i, len(chunks))
+                all_directions.extend(chunk_dirs)
+                # Небольшая пауза между чанками чтобы не перегружать API
+                if i < len(chunks):
+                    await asyncio.sleep(2)
+
+            # 4. Дедупликация
+            unique_directions = _deduplicate(all_directions)
+            logger.info(
+                "Документ %s: %d уникальных направлений (из %d)",
+                document_id, len(unique_directions), len(all_directions),
+            )
+
+            # 5. Сохранить в БД
+            for item in unique_directions:
                 if not isinstance(item, dict):
                     continue
                 title = (item.get("title") or "").strip()
@@ -242,19 +348,15 @@ async def analyze_document(
             document.error_message = None
             await session.commit()
             logger.info(
-                "Документ %s проанализирован: %d направлений",
-                document_id,
-                len(directions),
+                "Документ %s готов: %d направлений сохранено",
+                document_id, len(unique_directions),
             )
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             await session.rollback()
             document = await session.get(Document, document_id)
             if document is not None:
                 document.status = DocStatus.error
-                msg = f"{type(exc).__name__}: {exc}"
-                if raw_response:
-                    msg += f"\n\nСырой ответ модели:\n{raw_response[:2000]}"
-                document.error_message = msg[:4000]
+                document.error_message = f"{type(exc).__name__}: {exc}"[:4000]
                 await session.commit()
             logger.exception("Ошибка анализа документа %s", document_id)
