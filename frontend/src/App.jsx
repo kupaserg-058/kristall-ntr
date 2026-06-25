@@ -1,10 +1,10 @@
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import DocumentsPage from "./pages/DocumentsPage.jsx";
-import DirectionsPage from "./pages/DirectionsPage.jsx";
+import DocumentDetailPage from "./pages/DocumentDetailPage.jsx";
 
 export default function App() {
   const location = useLocation();
-  const isDirections = location.pathname.startsWith("/directions");
+  const isDocuments = location.pathname === "/" || location.pathname.startsWith("/documents");
 
   return (
     <div className="app">
@@ -12,14 +12,11 @@ export default function App() {
         <div className="header-inner">
           <Link to="/" className="logo">
             <div className="logo-icon">◆</div>
-            Кристалл<span className="logo-accent">.НТР</span>
+            <span className="logo-text">Кристалл<span className="logo-accent">.НТР</span></span>
           </Link>
           <nav className="nav">
-            <Link className={!isDirections ? "nav-link active" : "nav-link"} to="/">
+            <Link className={isDocuments ? "nav-link active" : "nav-link"} to="/">
               Документы
-            </Link>
-            <Link className={isDirections ? "nav-link active" : "nav-link"} to="/directions">
-              Направления
             </Link>
           </nav>
         </div>
@@ -27,7 +24,7 @@ export default function App() {
       <main className="main">
         <Routes>
           <Route path="/" element={<DocumentsPage />} />
-          <Route path="/directions" element={<DirectionsPage />} />
+          <Route path="/documents/:id" element={<DocumentDetailPage />} />
         </Routes>
       </main>
     </div>

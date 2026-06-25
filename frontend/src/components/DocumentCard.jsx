@@ -74,14 +74,16 @@ export default function DocumentCard({ doc, onUpdate, onDelete }) {
         )}
       </div>
 
-      {doc.status === "done" && doc.directions_count > 0 && (
+      {doc.status === "done" && (
         <div className="doc-card-footer">
           <button
             className="btn btn-secondary btn-sm"
             style={{ width: "100%" }}
-            onClick={() => navigate(`/directions?doc_id=${doc.id}`)}
+            onClick={() => navigate(`/documents/${doc.id}`)}
           >
-            Смотреть направления →
+            {doc.directions_count > 0
+              ? `Смотреть ${doc.directions_count} направлений →`
+              : "Открыть результаты →"}
           </button>
         </div>
       )}
